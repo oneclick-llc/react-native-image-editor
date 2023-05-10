@@ -295,11 +295,10 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
         );
         Log.d("ImageEditor", ".getFileExifTransformationInfo, exifOrientation:" + exifOrientation);
         switch (exifOrientation) {
-          case ExifInterface.ORIENTATION_ROTATE_270:
-            // FastImage (display-wise) rotates images with Orientation 90
-            // by 180 (to total of 270) on its own
-            // (for Lord knows what reason)
           case ExifInterface.ORIENTATION_ROTATE_90: {
+            return new ExifTransformationInfo(90, 1, 1);
+          }
+          case ExifInterface.ORIENTATION_ROTATE_270: {
             return new ExifTransformationInfo(270, 1, 1);
           }
           case ExifInterface.ORIENTATION_TRANSPOSE:
