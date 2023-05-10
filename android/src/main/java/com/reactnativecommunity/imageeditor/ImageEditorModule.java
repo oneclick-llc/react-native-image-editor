@@ -27,8 +27,8 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.database.Cursor;
 import android.graphics.Bitmap;
-import android.graphics.BitmapRegionDecoder;
 import android.graphics.BitmapFactory;
+import android.graphics.BitmapRegionDecoder;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.media.ExifInterface;
@@ -36,6 +36,7 @@ import android.net.Uri;
 import android.os.AsyncTask;
 import android.provider.MediaStore;
 import android.text.TextUtils;
+import android.util.Log;
 
 import com.facebook.common.logging.FLog;
 import com.facebook.react.bridge.GuardedAsyncTask;
@@ -230,6 +231,9 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
       mWidth = width;
       mHeight = height;
       mPromise = promise;
+      Log.d("ImageEditor", "constructed CropTask: { mUri: " + mUri
+              + ", mX: " + mX + ", mY: " + mY
+              + ", mWidth: " + mWidth + ", mHeight: " + mHeight + " } ");
     }
 
     public void setTargetSize(int width, int height) {
@@ -255,20 +259,76 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
       return stream;
     }
 
+    private static class ExifTransformationInfo {
+      boolean hasTransformations, isRotationMultipleOf90;
+      int rotationDegree, scaleX, scaleY;
+      public ExifTransformationInfo(int _rotationDegree, int _scaleX, int _scaleY) {
+        hasTransformations = _rotationDegree != 0 || _scaleX != 1 || _scaleY != 1;
+        isRotationMultipleOf90 = _rotationDegree > 0 && _rotationDegree % 90 == 0;
+        rotationDegree = _rotationDegree;
+        scaleX = _scaleX;
+        scaleY = _scaleY;
+        Log.d("ImageEditor", "Constructed ExifTransformationInfo: " + this.getString());
+      }
+
+      // can't simply override toString (requires annotation import)
+      private String getString() {
+        return "{ hasTransformations: " + hasTransformations
+                + ", isRotationMultipleOf90: " + isRotationMultipleOf90
+                + ", rotationDegree: " + rotationDegree
+                + ", scaleX: " + scaleX + ", scaleY: " + scaleY + " }";
+      }
+    }
+
+    private ExifTransformationInfo getFileExifTransformationInfo(String filePath) throws IOException {
+      try {
+        InputStream inputStream = mContext.getContentResolver().openInputStream(Uri.parse(filePath));
+
+        ExifInterface exifInterface = null;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+          exifInterface = new ExifInterface(inputStream);
+        }
+        assert exifInterface != null : "ImageEditor.getFileExifTransformationInfo exifInterface is null";
+        int exifOrientation = exifInterface.getAttributeInt(
+          ExifInterface.TAG_ORIENTATION,
+          ExifInterface.ORIENTATION_UNDEFINED
+        );
+        Log.d("ImageEditor", ".getFileExifTransformationInfo, exifOrientation:" + exifOrientation);
+        switch (exifOrientation) {
+          case ExifInterface.ORIENTATION_ROTATE_270:
+            // FastImage (display-wise) rotates images with Orientation 90
+            // by 180 (to total of 270) on its own
+            // (for Lord knows what reason)
+          case ExifInterface.ORIENTATION_ROTATE_90: {
+            return new ExifTransformationInfo(270, 1, 1);
+          }
+          case ExifInterface.ORIENTATION_TRANSPOSE:
+          case ExifInterface.ORIENTATION_TRANSVERSE: {
+            return new ExifTransformationInfo(270, -1, -1);
+          }
+          case ExifInterface.ORIENTATION_ROTATE_180: {
+            return new ExifTransformationInfo(180, 1, 1);
+          }
+          case ExifInterface.ORIENTATION_FLIP_VERTICAL: {
+            return new ExifTransformationInfo(0, 1, -1);
+          }
+          default: {
+            return new ExifTransformationInfo(0, 1, 1);
+          }
+        }
+      } catch (IOException error) {
+        Log.e("ImageEditor", ".getRotateDegreeFromExif error:" + error);
+        error.printStackTrace();
+        return null;
+      }
+    }
+
     @Override
     protected void doInBackgroundGuarded(Void... params) {
       try {
         BitmapFactory.Options outOptions = new BitmapFactory.Options();
 
-        // If we're downscaling, we can decode the bitmap more efficiently, using less memory
-        boolean hasTargetSize = (mTargetWidth > 0) && (mTargetHeight > 0);
-
-        Bitmap cropped;
-        if (hasTargetSize) {
-          cropped = cropAndResize(mTargetWidth, mTargetHeight, outOptions);
-        } else {
-          cropped = crop(outOptions);
-        }
+        Bitmap cropped = cropAndResize(mTargetWidth, mTargetHeight, outOptions);
 
         String mimeType = outOptions.outMimeType;
         if (mimeType == null || mimeType.isEmpty()) {
@@ -285,26 +345,6 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
         mPromise.resolve(Uri.fromFile(tempFile).toString());
       } catch (Exception e) {
         mPromise.reject(e);
-      }
-    }
-
-    /**
-     * Reads and crops the bitmap.
-     * @param outOptions Bitmap options, useful to determine {@code outMimeType}.
-     */
-    private Bitmap crop(BitmapFactory.Options outOptions) throws IOException {
-      InputStream inputStream = openBitmapInputStream();
-      // Effeciently crops image without loading full resolution into memory
-      // https://developer.android.com/reference/android/graphics/BitmapRegionDecoder.html
-      BitmapRegionDecoder decoder = BitmapRegionDecoder.newInstance(inputStream, false);
-      try {
-        Rect rect = new Rect(mX, mY, mX + mWidth, mY + mHeight);
-        return decoder.decodeRegion(rect, outOptions);
-      } finally {
-        if (inputStream != null) {
-          inputStream.close();
-        }
-        decoder.recycle();
       }
     }
 
@@ -358,9 +398,7 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
           throw new IOException("Cannot decode bitmap: " + mUri);
         }
       } finally {
-        if (inputStream != null) {
-          inputStream.close();
-        }
+        inputStream.close();
       }
 
       int cropX = Math.round(newX / (float) outOptions.inSampleSize);
@@ -369,11 +407,29 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
       int cropHeight = Math.round(newHeight / (float) outOptions.inSampleSize);
       float cropScale = scale * outOptions.inSampleSize;
 
-      Matrix scaleMatrix = new Matrix();
-      scaleMatrix.setScale(cropScale, cropScale);
-      boolean filter = true;
+      /* Rotation AND Scale (which may be caused be Exif Rotation data) Matrix */
+      Matrix rotationMatrix = new Matrix();
+      rotationMatrix.setScale(cropScale, cropScale);
+      ExifTransformationInfo fileExifTransformationInfo = getFileExifTransformationInfo(mUri);
 
-      return Bitmap.createBitmap(bitmap, cropX, cropY, cropWidth, cropHeight, scaleMatrix, filter);
+      if (fileExifTransformationInfo != null && fileExifTransformationInfo.hasTransformations) {
+        rotationMatrix.postRotate(fileExifTransformationInfo.rotationDegree);
+        rotationMatrix.postScale(
+                fileExifTransformationInfo.scaleX,
+                fileExifTransformationInfo.scaleY
+        );
+      }
+
+      Bitmap rotatedBitmap = Bitmap.createBitmap(
+              bitmap,
+              0,
+              0,
+              bitmap.getWidth(),
+              bitmap.getHeight(),
+              rotationMatrix,
+              true
+      );
+      return Bitmap.createBitmap(rotatedBitmap, cropX, cropY, cropWidth, cropHeight);
     }
   }
 
@@ -394,6 +450,7 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
         newExif.setAttribute(attribute, value);
       }
     }
+    newExif.setAttribute(ExifInterface.TAG_ORIENTATION, "1");
     newExif.saveAttributes();
   }
 
