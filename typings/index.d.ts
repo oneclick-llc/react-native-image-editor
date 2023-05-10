@@ -18,17 +18,12 @@ export type ImageCropData = {
     height: number,
   },
   /**
-   * (Optional) size to scale the cropped image to.
+   * Size to scale the cropped image to.
    */
-  displaySize?: $Maybe<{
+  displaySize: {
     width: number,
     height: number,
-  }>,
-  /**
-   * (Optional) the resizing mode to use when scaling the image. If the
-   * `displaySize` param is not specified, this has no effect.
-   */
-  resizeMode?: $Maybe<"contain" | "cover" | "stretch">,
+  },
 };
 
 declare class ImageEditor {
