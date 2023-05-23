@@ -47,11 +47,13 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.JSApplicationIllegalArgumentException;
 import com.facebook.react.bridge.ReadableMap;
+import com.facebook.react.bridge.Arguments;
+import com.facebook.react.bridge.WritableMap;
 import com.facebook.infer.annotation.Assertions;
 import com.facebook.react.common.ReactConstants;
 
 /**
- * Native module that provides image cropping functionality.
+ * Native module that provides image cropping and dimensions-getting functionality.
  */
 public class ImageEditorModule extends ReactContextBaseJavaModule {
 
@@ -154,6 +156,27 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
     }
   }
 
+  @ReactMethod
+  public void getImageDimensions(String uri, Promise jsPromise) throws IOException {
+    BitmapFactory.Options options = new BitmapFactory.Options();
+    options.inJustDecodeBounds = true;
+
+    try (InputStream imageInputStream = CropTask.openBitmapInputStream(
+            uri,
+            getReactApplicationContext()
+    )) {
+      // what if encode could not retrieve data?
+      BitmapFactory.decodeStream(imageInputStream, null, options);
+
+      WritableMap result = Arguments.createMap();
+      result.putInt("height", options.outHeight);
+      result.putInt("width", options.outWidth);
+      jsPromise.resolve(result);
+    } catch (java.io.IOException error) {
+      jsPromise.reject("ImageEditor.getImageDimensions Bitmap decode error: ", error);
+    }
+  }
+
   /**
    * Crop an image. If all goes well, the promise will be resolved with the file:// URI of
    * the new image as the only argument. This is a temporary file - consider using
@@ -245,16 +268,19 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
       mTargetHeight = height;
     }
 
-    private InputStream openBitmapInputStream() throws IOException {
+    private static InputStream openBitmapInputStream(
+            String uri,
+            Context reactContext
+    ) throws IOException {
       InputStream stream;
-      if (isLocalUri(mUri)) {
-        stream = mContext.getContentResolver().openInputStream(Uri.parse(mUri));
+      if (isLocalUri(uri)) {
+        stream = reactContext.getContentResolver().openInputStream(Uri.parse(uri));
       } else {
-        URLConnection connection = new URL(mUri).openConnection();
+        URLConnection connection = new URL(uri).openConnection();
         stream = connection.getInputStream();
       }
       if (stream == null) {
-        throw new IOException("Cannot open bitmap: " + mUri);
+        throw new IOException("Cannot open bitmap: " + uri);
       }
       return stream;
     }
@@ -387,7 +413,7 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
       // Decode the bitmap. We have to open the stream again, like in the example linked above.
       // Is there a way to just continue reading from the stream?
       outOptions.inSampleSize = getDecodeSampleSize(mWidth, mHeight, targetWidth, targetHeight);
-      InputStream inputStream = openBitmapInputStream();
+      InputStream inputStream = openBitmapInputStream(mUri, mContext);
 
       Bitmap bitmap;
       try {
