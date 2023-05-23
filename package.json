@@ -2,7 +2,7 @@
   "name": "@react-native-community/image-editor",
   "version": "2.3.1",
   "description": "React Native Image Editing native modules for iOS & Android",
-  "main": "lib/ImageEditor.js",
+  "main": "lib/ImageEditor.ts",
   "typings": "typings/index.d.ts",
   "author": "Dawid Urbaniak <dawidu@onet.pl>",
   "contributors": [],

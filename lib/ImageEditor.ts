@@ -4,49 +4,40 @@
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
  *
- * @flow
  */
 
-import {NativeModules} from 'react-native';
+import { NativeModules, Platform, Image } from 'react-native';
 
-const {RNCImageEditor} = NativeModules;
+const { RNCImageEditor } = NativeModules;
 
 type ImageCropData = {
   /**
    * The top-left corner of the cropped image, specified in the original
    * image's coordinate space.
    */
-  offset: {|
-    x: number,
-    y: number,
-  |},
+  offset: { x: number, y: number },
   /**
    * The size (dimensions) of the cropped image, specified in the original
    * image's coordinate space.
    */
-  size: {|
-    width: number,
-    height: number,
-  |},
+  size: { width: number, height: number },
   /**
-   * (Optional) size to scale the cropped image to.
+   * Size to scale the cropped image to.
    */
-  displaySize?: ?{|
-    width: number,
-    height: number,
-  |},
-  /**
-   * (Optional) the resizing mode to use when scaling the image. If the
-   * `displaySize` param is not specified, this has no effect.
-   */
-  resizeMode?: ?$Enum<{
-    contain: string,
-    cover: string,
-    stretch: string,
-  }>,
+  displaySize: { width: number, height: number },
 };
 
+/* RN.Image.getSize iOS version doesn't seem to return incorrect dimensions thus doesn't require replacement */
+const iosGetSize = (uri: string) =>
+  new Promise((resolve) => 
+    Image.getSize(uri, (width: number, height: number) => resolve({ width, height }))
+  )
+
 class ImageEditor {
+  static getImageDimensions(uri: string): Promise<{ width: number; height: number; }> {
+    return Platform.OS === 'android' ? RNCImageEditor.getImageDimensions(uri) : iosGetSize(uri);
+  }
+
   /**
    * Crop the image specified by the URI param. If URI points to a remote
    * image, it will be downloaded automatically. If the image cannot be
