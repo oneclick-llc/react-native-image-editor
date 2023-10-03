@@ -10,7 +10,7 @@ import { NativeModules, Platform, Image } from 'react-native';
 
 const { RNCImageEditor } = NativeModules;
 
-type ImageCropData = {
+export type ImageCropData = {
   /**
    * The top-left corner of the cropped image, specified in the original
    * image's coordinate space.
@@ -33,7 +33,7 @@ const iosGetSize = (uri: string) =>
     Image.getSize(uri, (width: number, height: number) => resolve({ width, height }))
   )
 
-class ImageEditor {
+export default class ImageEditor {
   static getImageDimensions(uri: string): Promise<{ width: number; height: number; }> {
     return Platform.OS === 'android' ? RNCImageEditor.getImageDimensions(uri) : iosGetSize(uri);
   }
@@ -54,5 +54,3 @@ class ImageEditor {
     return RNCImageEditor.cropImage(uri, cropData);
   }
 }
-
-export default ImageEditor;
