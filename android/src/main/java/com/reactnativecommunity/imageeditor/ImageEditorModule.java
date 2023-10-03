@@ -243,6 +243,15 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
         int height,
         Promise promise) {
       super(context);
+      if (x < 0) {
+        Log.d("ImageEditor", String.format("Invalid crop rectangle x (%d), replacing with 0", x));
+        x = 0;
+      }
+      if (y < 0) {
+        Log.d("ImageEditor", String.format("Invalid crop rectangle y (%d), replacing with 0", y));
+        y = 0;
+      }
+
       if (x < 0 || y < 0 || width <= 0 || height <= 0) {
         throw new JSApplicationIllegalArgumentException(String.format(
             "Invalid crop rectangle: [%d, %d, %d, %d]", x, y, width, height));
