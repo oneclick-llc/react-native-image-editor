@@ -17,10 +17,13 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
+import java.util.concurrent.Executor;
 
 import android.annotation.SuppressLint;
 import android.content.ContentResolver;
@@ -28,9 +31,7 @@ import android.content.Context;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.BitmapRegionDecoder;
 import android.graphics.Matrix;
-import android.graphics.Rect;
 import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.AsyncTask;
@@ -67,8 +68,8 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
 
   private static final String TEMP_FILE_PREFIX = "ReactNative_cropped_image_";
 
-  /** Compress quality of the output file. */
-  private static final int COMPRESS_QUALITY = 90;
+  /** Compress quality of the output file. 100 is ignored */
+  private static final int COMPRESS_QUALITY = 100;
 
   @SuppressLint("InlinedApi") private static final String[] EXIF_ATTRIBUTES = new String[] {
     ExifInterface.TAG_APERTURE,
@@ -184,8 +185,6 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
    *
    * @param uri the URI of the image to crop
    * @param options crop parameters specified as {@code {offset: {x, y}, size: {width, height}}}.
-   *        Optionally this also contains  {@code {targetSize: {width, height}}}. If this is
-   *        specified, the cropped image will be resized to that size.
    *        All units are in pixels (not DPs).
    * @param promise Promise to be resolved when the image has been cropped; the only argument that
    *        is passed to this is the file:// URI of the new image
@@ -195,6 +194,7 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
       String uri,
       ReadableMap options,
       Promise promise) {
+
     ReadableMap offset = options.hasKey("offset") ? options.getMap("offset") : null;
     ReadableMap size = options.hasKey("size") ? options.getMap("size") : null;
     if (offset == null || size == null ||
@@ -214,12 +214,7 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
         (int) size.getDouble("width"),
         (int) size.getDouble("height"),
         promise);
-    if (options.hasKey("displaySize")) {
-      ReadableMap targetSize = options.getMap("displaySize");
-      cropTask.setTargetSize(
-        (int) targetSize.getDouble("width"),
-        (int) targetSize.getDouble("height"));
-    }
+
     cropTask.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
   }
 
@@ -230,8 +225,6 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
     final int mY;
     final int mWidth;
     final int mHeight;
-    int mTargetWidth = 0;
-    int mTargetHeight = 0;
     final Promise mPromise;
 
     private CropTask(
@@ -243,6 +236,7 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
         int height,
         Promise promise) {
       super(context);
+      Log.d("ImageEditor", "CropTask CONSTRUCTOR");
       if (x < 0) {
         Log.d("ImageEditor", String.format("Invalid crop rectangle x (%d), replacing with 0", x));
         x = 0;
@@ -266,15 +260,6 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
       Log.d("ImageEditor", "constructed CropTask: { mUri: " + mUri
               + ", mX: " + mX + ", mY: " + mY
               + ", mWidth: " + mWidth + ", mHeight: " + mHeight + " } ");
-    }
-
-    public void setTargetSize(int width, int height) {
-      if (width <= 0 || height <= 0) {
-        throw new JSApplicationIllegalArgumentException(String.format(
-            "Invalid target size: [%d, %d]", width, height));
-      }
-      mTargetWidth = width;
-      mTargetHeight = height;
     }
 
     private static InputStream openBitmapInputStream(
@@ -362,7 +347,7 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
       try {
         BitmapFactory.Options outOptions = new BitmapFactory.Options();
 
-        Bitmap cropped = cropAndResize(mTargetWidth, mTargetHeight, outOptions);
+        Bitmap cropped = crop(outOptions);
 
         String mimeType = outOptions.outMimeType;
         if (mimeType == null || mimeType.isEmpty()) {
@@ -371,6 +356,8 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
 
         File tempFile = createTempFile(mContext, mimeType);
         writeCompressedBitmapToFile(cropped, mimeType, tempFile);
+        cropped.recycle();
+        cropped = null;
 
         if (mimeType.equals("image/jpeg")) {
           copyExif(mContext, Uri.parse(mUri), tempFile);
@@ -384,49 +371,23 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
 
     /**
      * Crop the rectangle given by {@code mX, mY, mWidth, mHeight} within the source bitmap
-     * and scale the result to {@code targetWidth, targetHeight}.
      * @param outOptions Bitmap options, useful to determine {@code outMimeType}.
      */
-    private Bitmap cropAndResize(
-        int targetWidth,
-        int targetHeight,
+    private Bitmap crop(
         BitmapFactory.Options outOptions)
         throws IOException {
       Assertions.assertNotNull(outOptions);
 
       // Loading large bitmaps efficiently:
       // http://developer.android.com/training/displaying-bitmaps/load-bitmap.html
+      // This can use significantly less memory than decoding the full-resolution bitmap
+      final int downscaleRatio = getDownscaleRatio(mWidth, mHeight);
+      outOptions.inSampleSize = downscaleRatio;
 
-      // This uses scaling mode COVER
-
-      // Where would the crop rect end up within the scaled bitmap?
-      float newWidth, newHeight, newX, newY, scale;
-      float cropRectRatio = mWidth / (float) mHeight;
-      float targetRatio = targetWidth / (float) targetHeight;
-      if (cropRectRatio > targetRatio) {
-        // e.g. source is landscape, target is portrait
-        newWidth = mHeight * targetRatio;
-        newHeight = mHeight;
-        newX = mX + (mWidth - newWidth) / 2;
-        newY = mY;
-        scale = targetHeight / (float) mHeight;
-      } else {
-        // e.g. source is landscape, target is portrait
-        newWidth = mWidth;
-        newHeight = mWidth / targetRatio;
-        newX = mX;
-        newY = mY + (mHeight - newHeight) / 2;
-        scale = targetWidth / (float) mWidth;
-      }
-
-      // Decode the bitmap. We have to open the stream again, like in the example linked above.
-      // Is there a way to just continue reading from the stream?
-      outOptions.inSampleSize = getDecodeSampleSize(mWidth, mHeight, targetWidth, targetHeight);
       InputStream inputStream = openBitmapInputStream(mUri, mContext);
 
       Bitmap bitmap;
       try {
-        // This can use significantly less memory than decoding the full-resolution bitmap
         bitmap = BitmapFactory.decodeStream(inputStream, null, outOptions);
         if (bitmap == null) {
           throw new IOException("Cannot decode bitmap: " + mUri);
@@ -435,18 +396,11 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
         inputStream.close();
       }
 
-      int cropX = Math.round(newX / (float) outOptions.inSampleSize);
-      int cropY = Math.round(newY / (float) outOptions.inSampleSize);
-      int cropWidth = Math.round(newWidth / (float) outOptions.inSampleSize);
-      int cropHeight = Math.round(newHeight / (float) outOptions.inSampleSize);
-      float cropScale = scale * outOptions.inSampleSize;
-
-      /* Rotation AND Scale (which may be caused be Exif Rotation data) Matrix */
-      Matrix rotationMatrix = new Matrix();
-      rotationMatrix.setScale(cropScale, cropScale);
       ExifTransformationInfo fileExifTransformationInfo = getFileExifTransformationInfo(mUri);
-
+      /* Rotation  (which may be caused be Exif Rotation data) Matrix */
+      Matrix rotationMatrix = null;
       if (fileExifTransformationInfo != null && fileExifTransformationInfo.hasTransformations) {
+        rotationMatrix = new Matrix();
         rotationMatrix.postRotate(fileExifTransformationInfo.rotationDegree);
         rotationMatrix.postScale(
                 fileExifTransformationInfo.scaleX,
@@ -454,19 +408,50 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
         );
       }
 
-      Bitmap rotatedBitmap = Bitmap.createBitmap(
-              bitmap,
-              0,
-              0,
-              bitmap.getWidth(),
-              bitmap.getHeight(),
-              rotationMatrix,
-              true
+      if (rotationMatrix != null) {
+        Log.d("ImageEditor", "rotating bitmap");
+        bitmap = Bitmap.createBitmap(
+                bitmap,
+                0,
+                0,
+                bitmap.getWidth(),
+                bitmap.getHeight(),
+                rotationMatrix,
+                true
+        );
+      } else {
+        Log.d("ImageEditor", "there is no need to rotate bitmap");
+      }
+
+      int cropX = mX / downscaleRatio;
+      int cropY = mY / downscaleRatio;
+      int cropWidth = mWidth / downscaleRatio;
+      int cropHeight = mHeight / downscaleRatio;
+
+      Log.d("ImageEditor",
+            "crop data: { cropX: " + cropX
+                    + ", cropY: " + cropY
+                    + ", cropWidth: " + cropWidth
+                    + ", cropHeight: " + cropHeight
+                    + ", bitmapHeight: " + bitmap.getHeight()
+                    + ", bitmapWidth: " + bitmap.getWidth() + " }"
       );
-      return Bitmap.createBitmap(rotatedBitmap, cropX, cropY, cropWidth, cropHeight);
+
+      if (
+          cropX == 0 &&
+          cropY == 0 &&
+          cropWidth == bitmap.getWidth() &&
+          cropHeight == bitmap.getHeight()
+      ) {
+        Log.d("ImageEditor", "bitmap crop is not required, RETURNING not cropped bitmap");
+        return bitmap;
+      }
+
+      bitmap = Bitmap.createBitmap(bitmap, cropX, cropY, cropWidth, cropHeight);
+      Log.d("ImageEditor", "CROPPED bitmap, returning");
+      return bitmap;
     }
   }
-
   // Utils
 
   private static void copyExif(Context context, Uri oldImage, File newFile) throws IOException {
@@ -546,9 +531,7 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
     try {
       cropped.compress(getCompressFormatForType(mimeType), COMPRESS_QUALITY, out);
     } finally {
-      if (out != null) {
-        out.close();
-      }
+      out.close();
     }
   }
 
@@ -578,22 +561,30 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
     return File.createTempFile(TEMP_FILE_PREFIX, getFileExtensionForType(mimeType), cacheDir);
   }
 
-  /**
-   * When scaling down the bitmap, decode only every n-th pixel in each dimension.
-   * Calculate the largest {@code inSampleSize} value that is a power of 2 and keeps both
-   * {@code width, height} larger or equal to {@code targetWidth, targetHeight}.
-   * This can significantly reduce memory usage.
-   */
-  private static int getDecodeSampleSize(int width, int height, int targetWidth, int targetHeight) {
-    int inSampleSize = 1;
-    if (height > targetHeight || width > targetWidth) {
-      int halfHeight = height / 2;
-      int halfWidth = width / 2;
-      while ((halfWidth / inSampleSize) >= targetWidth
-          && (halfHeight / inSampleSize) >= targetHeight) {
-        inSampleSize *= 2;
+  // in pixels
+  private static final int IMAGE_GREATEST_SIZE_MAX_LENGTH = 1280;
+  // https://developer.android.com/topic/performance/graphics/load-bitmap#java
+  private static int getDownscaleRatio(int width, int height) {
+    Log.d("ImageEditor", "getDownscaleRatio(width: " + width + ", height: " + height);
+    final String greatestSide = height >= width ? "height" : "width";
+    int downscaleRatio = 1;
+
+    // Calculate the largest downscaleRatio value that is a power of 2 and keeps both
+    // height and width larger than the IMAGE_GREATEST_SIZE_MAX_LENGTH.
+    if (greatestSide.equals("height")) {
+      final int halfHeight = height / 2;
+      while ((halfHeight / downscaleRatio) >= IMAGE_GREATEST_SIZE_MAX_LENGTH) {
+        downscaleRatio *= 2;
       }
     }
-    return inSampleSize;
+    if (greatestSide.equals("width")) {
+      final int halfWidth = width / 2;
+      while ((halfWidth / downscaleRatio) >= IMAGE_GREATEST_SIZE_MAX_LENGTH) {
+        downscaleRatio *= 2;
+      }
+    }
+
+    Log.d("ImageEditor", "getDownscaleRatio result: " + downscaleRatio);
+    return downscaleRatio;
   }
 }
