@@ -172,6 +172,10 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
       WritableMap result = Arguments.createMap();
       result.putInt("height", options.outHeight);
       result.putInt("width", options.outWidth);
+      Log.d("ImageEditor",
+              ".getImageDimensions[result]: { height: " + options.outHeight
+                      + ", width: " + options.outWidth
+      );
       jsPromise.resolve(result);
     } catch (java.io.IOException error) {
       jsPromise.reject("ImageEditor.getImageDimensions Bitmap decode error: ", error);
@@ -440,8 +444,8 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
       if (
           cropX == 0 &&
           cropY == 0 &&
-          cropWidth == bitmap.getWidth() &&
-          cropHeight == bitmap.getHeight()
+          almostEqual(cropWidth, bitmap.getWidth(), 1) &&
+          almostEqual(cropHeight, bitmap.getHeight(), 1)
       ) {
         Log.d("ImageEditor", "bitmap crop is not required, RETURNING not cropped bitmap");
         return bitmap;
@@ -559,6 +563,12 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
           externalCacheDir : internalCacheDir;
     }
     return File.createTempFile(TEMP_FILE_PREFIX, getFileExtensionForType(mimeType), cacheDir);
+  }
+
+  public static boolean almostEqual(double a, double b, double eps) {
+    Log.d("ImageEditor", "almostEqual(a: " + a + ", b: " + b + ", eps: " + eps);
+    Log.d("ImageEditor", "Math.abs(a-b) = " + Math.abs(a-b));
+    return Math.abs(a-b) <= eps;
   }
 
   // in pixels
