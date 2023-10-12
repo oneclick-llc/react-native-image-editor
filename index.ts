@@ -23,6 +23,8 @@ export type ImageCropData = {
   size: { width: number, height: number },
   /**
    * Size to scale the cropped image to.
+   * only works on iOS (and will be removed afterwards),
+   * defaults to 1280 for larger size on Android
    */
   displaySize: { width: number, height: number },
 };
