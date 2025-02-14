@@ -20,7 +20,7 @@
 #if __has_include(<RCTImage/RCTImageUtils.h>)
 #import <RCTImage/RCTImageUtils.h>
 #else
-#import "RCTImageUtils.h"
+#import <React/RCTImageUtils.h>
 #endif
 
 @implementation RNCImageEditor
