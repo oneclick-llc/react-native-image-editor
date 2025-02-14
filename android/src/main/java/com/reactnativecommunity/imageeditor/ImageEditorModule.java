@@ -17,13 +17,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URL;
 import java.net.URLConnection;
-import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
-import java.util.concurrent.Executor;
 
 import android.annotation.SuppressLint;
 import android.content.ContentResolver;
@@ -31,7 +28,9 @@ import android.content.Context;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Matrix;
+import android.graphics.RectF;
 import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.AsyncTask;
@@ -431,28 +430,67 @@ public class ImageEditorModule extends ReactContextBaseJavaModule {
       int cropY = mY / downscaleRatio;
       int cropWidth = mWidth / downscaleRatio;
       int cropHeight = mHeight / downscaleRatio;
+      int originalWidth = bitmap.getWidth();
+      int originalHeight = bitmap.getHeight();
 
       Log.d("ImageEditor",
             "crop data: { cropX: " + cropX
                     + ", cropY: " + cropY
                     + ", cropWidth: " + cropWidth
                     + ", cropHeight: " + cropHeight
-                    + ", bitmapHeight: " + bitmap.getHeight()
-                    + ", bitmapWidth: " + bitmap.getWidth() + " }"
+                    + ", originalHeight: " + originalHeight
+                    + ", originalWidth: " + originalWidth + " }"
       );
 
-      if (
+      boolean requiresVerticalWhitespace = cropHeight + cropY > originalHeight;
+      boolean requiresHorizontalWhitespace = cropWidth + cropX > originalWidth;
+      if (requiresVerticalWhitespace || requiresHorizontalWhitespace) {
+        int outputHeight = requiresVerticalWhitespace ? cropHeight + cropY : originalHeight;
+        int outputWidth = requiresHorizontalWhitespace ? cropWidth + cropX : originalWidth;
+
+        Bitmap outputBitmap = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888);
+
+        Canvas outputCanvas = new Canvas(outputBitmap);
+
+        float offsetLeft = (float) (outputWidth - originalWidth) / 2;
+        float offsetRight = offsetLeft + originalWidth;
+        float offsetTop = (float) (outputHeight - originalHeight) / 2;
+        float offsetBottom = offsetTop + originalHeight;
+
+        Log.d("ImageEditor", "Image requires Whitespace Addition"
+          + "{ requiresVerticalWhitespace: " + requiresVerticalWhitespace
+          + ", requiresHorizontalWhitespace: " + requiresHorizontalWhitespace
+          + ", outputHeight: " + outputHeight
+          + ", outputWidth: " + outputWidth
+          + ", originalHeight: " + originalHeight
+          + ", originalWidth: " + originalWidth
+          + ", offsetLeft: " + offsetLeft
+          + ", offsetRight: " + offsetRight
+          + ", offsetTop: " + offsetTop
+          + ", offsetBottom: " + offsetBottom + " }"
+        );
+        outputCanvas.drawBitmap(
+          bitmap,
+          null,
+          new RectF(offsetLeft, offsetTop, offsetRight, offsetBottom),
+          null
+        );
+
+        bitmap = outputBitmap;
+      } else {
+        if (
           cropX == 0 &&
           cropY == 0 &&
           almostEqual(cropWidth, bitmap.getWidth(), 1) &&
           almostEqual(cropHeight, bitmap.getHeight(), 1)
-      ) {
-        Log.d("ImageEditor", "bitmap crop is not required, RETURNING not cropped bitmap");
-        return bitmap;
-      }
+        ) {
+          Log.d("ImageEditor", "bitmap crop is not required, RETURNING not cropped bitmap");
+          return bitmap;
+        }
 
-      bitmap = Bitmap.createBitmap(bitmap, cropX, cropY, cropWidth, cropHeight);
-      Log.d("ImageEditor", "CROPPED bitmap, returning");
+        bitmap = Bitmap.createBitmap(bitmap, cropX, cropY, cropWidth, cropHeight);
+        Log.d("ImageEditor", "CROPPED bitmap, returning");
+      }
       return bitmap;
     }
   }
